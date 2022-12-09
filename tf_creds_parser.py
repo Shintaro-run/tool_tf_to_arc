@@ -7,11 +7,11 @@ Run it in a virtual environment:
     > source env/bin/activate
     > pip install python-hcl2
     > chmod +x tf_creds_parser.py
-    > ./tf_creds_parser.py gcp_resources.tf
+    > ./tf_creds_parser.py --iam gcp_resources.tf
 
 
 Author: Konstantin N <pardusurbanus@protonmail.com>
-
+Version: 0.0.2
 """
 
 import hcl2
@@ -19,28 +19,105 @@ import csv
 import argparse
 import sys
 from pathlib import Path
+import enum
 
-obj_list = None
 
-def csv_map(data_tuple: tuple) -> dict:
-    '''
-        Create mapping for the csv file
-    '''
+class Mode(enum.Enum):
+    BQ=1,
+    IAM=2
+
+
+def list_prepare(mode: Mode, tf_dict: dict) -> list:
+    '''Get access entities from tf file dict'''
+
+    resource_dict = tf_dict['resource']
+    resource = ''
+    if mode == Mode.BQ:
+        resource = 'google_bigquery_dataset'
+    elif mode == Mode.IAM:
+        resource = 'google_project_iam_member'
+    else:
+        return []
+
+    obj_list = list(map(
+        lambda x: list(x[resource].items())[0][1],
+        filter(
+            lambda x: resource in x,
+            resource_dict
+        )
+    ))
+
+    return obj_list
+
+def csv_iam_map(data_tuple: tuple) -> dict:
+    '''Mapping iam resource dict to csv type'''
     idx, el = data_tuple
-    el = list(el['google_project_iam_member'].items())[0][1]
-    print(el)
-    return {
+    
+    obj =  {
         'No': idx,
         'role': el['role'],
         'member': el['member'],
     }
 
+    print(obj)
+    return obj
+
+def csv_bq_map(data_tuple: tuple) -> dict:
+    '''Mapping iam resource dict to csv type'''
+    idx, els = data_tuple
+
+    accesses = []
+
+    for el in els['access']:
+        if 'view' in el:
+            for access in el['view']:
+                obj = {
+                    'No': idx,
+                    'dataset_id': access['dataset_id'],
+                    'role': 'view',
+                    'entity': access['project_id'],
+                }
+                print(obj)
+                accesses.append(obj)
+        else:
+            obj = {
+                'No': idx,
+                'dataset_id': els['dataset_id'],
+                'role': el['role'],
+                'entity': '',
+            }
+
+            if 'user_by_email' in el:
+                obj['entity'] = el['user_by_email']
+            if 'domain' in el:
+                obj['entity'] = el['domain']
+            if 'special_group' in el:
+                obj['entity'] = el['special_group']
+            if 'group_by_email' in el:
+                obj['entity'] = el['group_by_email']
+
+            print(obj)
+    
+    return accesses
+
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--iam", action="store_true", help="parse iam resources (default)")
+    parser.add_argument("-b", "--bq", action="store_true", help="parse big query resources")
     parser.add_argument("tf_path", help="path to the tf file")
     args = parser.parse_args()
+
+    curr_mode = Mode.IAM
+
+    if args.bq:
+        curr_mode = Mode.BQ
+
+    if args.iam and args.bq:
+        print('\nPlease choose either iam or bq option\n')
+        parser.print_help()
+        sys.exit(1)
 
     if not args.tf_path:
         print('No filename given')
@@ -50,6 +127,8 @@ if __name__ == '__main__':
         print(f'{args.tf_path} is bad terraform resource file, please check the path.')
         sys.exit(1)
 
+    file_dict = None
+
     with open(str(args.tf_path), 'r') as file:
         try:
             file_dict = hcl2.load(file)
@@ -57,16 +136,25 @@ if __name__ == '__main__':
             print('Error on loading .tf file. Please check the syntax')
             sys.exit(1)
 
-        obj_list = list(filter(
-            lambda x: 'google_project_iam_member' in x,
-            file_dict['resource']
-        ))
+    lst = list_prepare(curr_mode, file_dict)
 
-    new_dict = list(map(csv_map, enumerate(obj_list)))
+    if curr_mode == Mode.IAM:
+        map_func = csv_iam_map
+        fieldnames = ['No', 'role', 'member']
+        new_dict = list(map(
+            map_func, 
+            enumerate(lst)
+        ))
+    else:
+        map_func = csv_bq_map
+        fieldnames = ['No', 'dataset_id', 'role', 'entity']
+        new_dict = sum(list(map(
+            map_func, 
+            enumerate(lst)
+        )), [])
 
     csv_name = str(args.tf_path).replace('.tf','.csv')
     with open(csv_name, 'w') as csv_file:
-        fieldnames = ['No', 'role', 'member']
 
         try:
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
