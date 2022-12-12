@@ -2,7 +2,7 @@
 
 """ Script to get google_project_iam_member fields from tf documents
 
-Run it in a virtual environment: 
+Run it in a virtual environment:
     > python3 -m venv env
     > source env/bin/activate
     > pip install python-hcl2
@@ -11,7 +11,7 @@ Run it in a virtual environment:
 
 
 Author: Konstantin N <pardusurbanus@protonmail.com>
-Version: 0.0.2
+Version: 0.0.3
 """
 
 import hcl2
@@ -20,11 +20,54 @@ import argparse
 import sys
 from pathlib import Path
 import enum
+from dataclasses import dataclass, asdict
+
+
+@dataclass
+class BQResource(object):
+    '''
+        Represents BQ resource access
+
+        ...
+
+        Attributes
+        ----------
+        no: int
+            record number
+        dataset_id: str
+        role: str
+        entity: str
+            aceess entity: group, user, view
+    '''
+    dataset_id: str
+    role: str
+    entity: str = ''
+    no: int = 0
+
+
+@dataclass
+class IAMResource(object):
+    '''
+        Represents IAM resource access
+
+        ...
+
+        Attributes
+        ----------
+        no: int
+            record number
+        role: str
+        member: str
+            aceess entity (member)
+    '''
+    role: str
+    member: str
+    no: int = 0
 
 
 class Mode(enum.Enum):
-    BQ=1,
-    IAM=2
+    BQ = 1,
+    IAM = 2
 
 
 def list_prepare(mode: Mode, tf_dict: dict) -> list:
@@ -49,63 +92,73 @@ def list_prepare(mode: Mode, tf_dict: dict) -> list:
 
     return obj_list
 
+
 def csv_iam_map(data_tuple: tuple) -> dict:
     '''Mapping iam resource dict to csv type'''
     idx, el = data_tuple
-    
-    obj =  {
-        'No': idx,
+
+    obj = asdict(IAMResource(**{
+        'no': idx+1,
         'role': el['role'],
         'member': el['member'],
-    }
+    }))
 
     print(obj)
     return obj
 
+
 def csv_bq_map(data_tuple: tuple) -> dict:
-    '''Mapping iam resource dict to csv type'''
-    idx, els = data_tuple
+    '''Mapping bq resource dict to csv type'''
+    idx, el = data_tuple
+    el.no = idx+1
+    obj = asdict(el)
+    print(obj)
+    return obj
+
+
+def bq_parse(els: list) -> dict:
+    '''Parsing bq resources'''
 
     accesses = []
 
     for el in els['access']:
         if 'view' in el:
             for access in el['view']:
-                obj = {
-                    'No': idx,
+                obj = BQResource(**{
                     'dataset_id': access['dataset_id'],
                     'role': 'view',
                     'entity': access['project_id'],
-                }
-                print(obj)
+                })
                 accesses.append(obj)
         else:
-            obj = {
-                'No': idx,
+            obj = BQResource(**{
                 'dataset_id': els['dataset_id'],
                 'role': el['role'],
-                'entity': '',
-            }
+            })
 
             if 'user_by_email' in el:
-                obj['entity'] = el['user_by_email']
+                obj.entity = el['user_by_email']
             if 'domain' in el:
-                obj['entity'] = el['domain']
+                obj.entity = el['domain']
             if 'special_group' in el:
-                obj['entity'] = el['special_group']
+                obj.entity = el['special_group']
             if 'group_by_email' in el:
-                obj['entity'] = el['group_by_email']
+                obj.entity = el['group_by_email']
+            accesses.append(obj)
 
-            print(obj)
-    
     return accesses
-
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--iam", action="store_true", help="parse iam resources (default)")
-    parser.add_argument("-b", "--bq", action="store_true", help="parse big query resources")
+    parser.add_argument(
+        "-i", "--iam", action="store_true",
+        help="parse iam resources (default)"
+    )
+    parser.add_argument(
+        "-b", "--bq", action="store_true",
+        help="parse big query resources"
+    )
     parser.add_argument("tf_path", help="path to the tf file")
     args = parser.parse_args()
 
@@ -124,7 +177,10 @@ if __name__ == '__main__':
         sys.exit(1)
 
     if not Path(args.tf_path).is_file() or not args.tf_path.endswith('.tf'):
-        print(f'{args.tf_path} is bad terraform resource file, please check the path.')
+        print((
+            f'{args.tf_path} is bad terraform '
+            'resource file, please check the path.'
+        ))
         sys.exit(1)
 
     file_dict = None
@@ -139,28 +195,21 @@ if __name__ == '__main__':
     lst = list_prepare(curr_mode, file_dict)
 
     if curr_mode == Mode.IAM:
-        map_func = csv_iam_map
-        fieldnames = ['No', 'role', 'member']
-        new_dict = list(map(
-            map_func, 
-            enumerate(lst)
-        ))
+        fieldnames = ['no', 'role', 'member']
+        new_list = list(map(csv_iam_map, enumerate(lst)))
     else:
-        map_func = csv_bq_map
-        fieldnames = ['No', 'dataset_id', 'role', 'entity']
-        new_dict = sum(list(map(
-            map_func, 
-            enumerate(lst)
-        )), [])
+        fieldnames = ['no', 'dataset_id', 'role', 'entity']
+        new_list = sum(list(map(bq_parse, lst)), [])
+        new_list = list(map(csv_bq_map, enumerate(new_list)))
 
-    csv_name = str(args.tf_path).replace('.tf','.csv')
+    csv_name = str(args.tf_path).replace('.tf', '.csv')
     with open(csv_name, 'w') as csv_file:
 
         try:
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
 
             writer.writeheader()
-            writer.writerows(new_dict)
+            writer.writerows(new_list)
 
             print(f'Finished. Check {csv_name}')
         except Exception:
@@ -170,4 +219,3 @@ if __name__ == '__main__':
                 'Please check access rights.'
             )
             sys.exit(1)
-

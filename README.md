@@ -14,4 +14,4 @@ chmod +x tf_creds_parser.py
 
 Use `--iam` option to get "google_project_iam_member" resources, `--bq` to get "google_bigquery_dataset" resources.
 
-Version 0.0.2 searches for 'google_project_iam_member' and 'google_bigquery_dataset' resources.
+Version 0.0.3 searches for 'google_project_iam_member' and 'google_bigquery_dataset' resources.
